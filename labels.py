@@ -14,6 +14,11 @@ def parse_arguments():
         "input",
         help="A set code (e.g., ABC) or a path to a .txt file containing set codes.",
     )
+    parser.add_argument(
+        "--symbol",
+        "-s",
+        help="Path to a custom symbol image file to use instead of fetching from the web.",
+    )
     return parser.parse_args()
 
 
@@ -40,7 +45,7 @@ def is_text_file(filename):
     return filename.lower().endswith(".txt")
 
 
-def process_text_file(filename):
+def process_text_file(filename, custom_symbol_path=None):
     try:
         # First count total lines to process
         with open(filename, "r") as file:
@@ -54,7 +59,7 @@ def process_text_file(filename):
                 if set_code:
                     processed += 1
                     print(f"Processing {processed}/{total_lines}: {set_code}", end="\r")
-                    create_label(set_code)
+                    create_label(set_code, custom_symbol_path)
 
             # Print newline at the end to clear the progress line
             print(f"\nCompleted processing {processed} set codes from {filename}")
@@ -65,45 +70,56 @@ def process_text_file(filename):
         print(f"Error reading file: {e}")
 
 
-def add_set_symbol(image: Image, set_code):
-    # Fetch and add the symbol image first (so we can position text accordingly)
-    response = requests.get(
-        url=f"https://mtgcollectionbuilder.com/images/symbols/sets/{set_code}.png"
-    )
-    if response.status_code == 200:
-        png_image = response.content
+def add_set_symbol(image: Image, set_code, custom_symbol_path=None):
+    symbol_image = None
+    
+    # Try to use custom symbol first if provided
+    if custom_symbol_path and os.path.exists(custom_symbol_path):
+        try:
+            symbol_image = Image.open(custom_symbol_path)
+            print(f"Using custom symbol from {custom_symbol_path}")
+        except Exception as e:
+            print(f"Error loading custom symbol: {e}")
+            symbol_image = None
+    
+    # If no custom symbol or it failed to load, fetch from web
+    if symbol_image is None:
+        response = requests.get(
+            url=f"https://mtgcollectionbuilder.com/images/symbols/sets/{set_code}.png"
+        )
+        if response.status_code == 200:
+            png_image = response.content
+            # Load the PNG image into Pillow
+            symbol_image = Image.open(BytesIO(png_image))
+        else:
+            print(f"No symbol image for {set_code}")
+            return
 
-        # Load the PNG image into Pillow
-        symbol_image = Image.open(BytesIO(png_image))
+    # Get original dimensions
+    img_width, img_height = symbol_image.size
+    height = image.height
 
-        # Get original dimensions
-        img_width, img_height = symbol_image.size
-        height = image.height
+    # Calculate scaling factors for both height and width constraints
+    height_scale = height / img_height
+    width_scale = height / img_width  # Using height as max width
 
-        # Calculate scaling factors for both height and width constraints
-        height_scale = height / img_height
-        width_scale = height / img_width  # Using height as max width
+    # Use the smaller scaling factor to ensure both constraints are met
+    scale = min(height_scale, width_scale)
+    new_width = int(img_width * scale)
+    new_height = int(img_height * scale)
 
-        # Use the smaller scaling factor to ensure both constraints are met
-        scale = min(height_scale, width_scale)
-        new_width = int(img_width * scale)
-        new_height = int(img_height * scale)
+    # Resize symbol and convert to RGBA
+    symbol_image = symbol_image.resize((new_width, new_height)).convert("RGBA")
 
-        # Resize symbol and convert to RGBA
-        symbol_image = symbol_image.resize((new_width, new_height)).convert("RGBA")
+    # Position symbol at the left side and vertically centered
+    symbol_x = 0
+    symbol_y = (height - new_height) // 2
 
-        # Position symbol at the left side and vertically centered
-        symbol_x = 0
-        symbol_y = (height - new_height) // 2
-
-        # Paste the symbol
-        image.paste(symbol_image, (symbol_x, symbol_y), symbol_image)
-
-    else:
-        print(f"No symbol image for {set_code}")
+    # Paste the symbol
+    image.paste(symbol_image, (symbol_x, symbol_y), symbol_image)
 
 
-def create_label(set_code):
+def create_label(set_code, custom_symbol_path=None):
     set_code = set_code.upper()
     info = fetch_set_info(set_code)
     set_name = info["name"]
@@ -186,7 +202,7 @@ def create_label(set_code):
         anchor="ls",  # Left, baseline anchor
     )
 
-    add_set_symbol(image, set_code)
+    add_set_symbol(image, set_code, custom_symbol_path)
 
     # Create the "labels" folder if it doesn't exist
     if not os.path.exists("./labels"):
@@ -203,18 +219,19 @@ def create_label(set_code):
 def main():
     args = parse_arguments()
     input_value = args.input
+    custom_symbol_path = args.symbol
 
     # Check if the input is a file or a direct set code
     if "." in input_value:
         if is_text_file(input_value):
-            process_text_file(input_value)
+            process_text_file(input_value, custom_symbol_path)
         else:
             print(
                 f"Error: '{input_value}' is not a text file. Please provide a .txt file or a set code."
             )
     else:
         # Treat as direct set code
-        create_label(input_value)
+        create_label(input_value, custom_symbol_path)
 
 
 if __name__ == "__main__":
